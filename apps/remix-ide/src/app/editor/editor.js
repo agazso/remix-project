@@ -1,48 +1,15 @@
 'use strict'
+const yo = require('yo-yo')
+import React from 'react' // eslint-disable-line
+import ReactDOM from 'react-dom'
+import { EditorUI } from '@remix-ui/editor'
 import { Plugin } from '@remixproject/engine'
 import * as packageJson from '../../../../../package.json'
 
 const EventManager = require('../../lib/events')
-const yo = require('yo-yo')
-const csjs = require('csjs-inject')
-const ace = require('brace')
 
 const globalRegistry = require('../../global/registry')
 const SourceHighlighters = require('./SourceHighlighters')
-
-const Range = ace.acequire('ace/range').Range
-require('brace/ext/language_tools')
-require('brace/ext/searchbox')
-const langTools = ace.acequire('ace/ext/language_tools')
-require('ace-mode-solidity/build/remix-ide/mode-solidity')
-require('ace-mode-move/build/remix-ide/mode-move')
-require('ace-mode-zokrates')
-require('ace-mode-lexon')
-require('brace/mode/javascript')
-require('brace/mode/python')
-require('brace/mode/json')
-require('brace/mode/rust')
-require('brace/theme/chrome') // for all light themes
-require('brace/theme/chaos') // for all dark themes
-require('../../assets/js/editor/darkTheme') // a custom one for remix 'Dark' theme
-
-const css = csjs`
-  .ace-editor {
-    width     : 100%;
-  }
-`
-document.head.appendChild(yo`
-  <style>
-    .ace-tm .ace_gutter,
-    .ace-tm .ace_gutter-active-line,
-    .ace-tm .ace_marker-layer .ace_active-line {
-        background-color: var(--secondary);
-    }
-    .ace_gutter-cell.ace_breakpoint{
-      background-color: var(--secondary);
-    }
-  </style>
-`)
 
 const profile = {
   displayName: 'Editor',
@@ -53,24 +20,29 @@ const profile = {
 }
 
 class Editor extends Plugin {
-  constructor (opts = {}, themeModule) {
+  constructor () {
     super(profile)
     // Dependancies
     this._components = {}
     this._components.registry = globalRegistry
     this._deps = {
-      config: this._components.registry.get('config').api
+      config: this._components.registry.get('config').api,
+      themeModule: this._components.registry.get('themeModule').api
     }
 
     this._themes = {
-      light: 'chrome',
-      dark: 'chaos',
-      remixDark: 'remixDark'
+      light: 'light',
+      dark: 'vs-dark',
+      remixDark: 'vs-dark'
     }
-    themeModule.events.on('themeChanged', (theme) => {
-      this.setTheme(theme.name === 'Dark' ? 'remixDark' : theme.quality)
-    })
 
+    const translateTheme = (theme) => this._themes[theme.name === 'Dark' ? 'remixDark' : theme.quality]
+    this._deps.themeModule.events.on('themeChanged', (theme) => {
+      this.currentTheme = translateTheme(theme)
+      this.renderComponent()
+    })
+    this.currentTheme = translateTheme(this._deps.themeModule.currentTheme())
+    this.models = []
     // Init
     this.event = new EventManager()
     this.sessions = {}
@@ -79,122 +51,43 @@ class Editor extends Plugin {
     this.previousInput = ''
     this.saveTimeout = null
     this.sourceHighlighters = new SourceHighlighters()
-    this.emptySession = this._createSession('')
+    this.emptySession = null
     this.modes = {
-      sol: 'ace/mode/solidity',
-      yul: 'ace/mode/solidity',
-      mvir: 'ace/mode/move',
-      js: 'ace/mode/javascript',
-      py: 'ace/mode/python',
-      vy: 'ace/mode/python',
-      zok: 'ace/mode/zokrates',
-      lex: 'ace/mode/lexon',
-      txt: 'ace/mode/text',
-      json: 'ace/mode/json',
-      abi: 'ace/mode/json',
-      rs: 'ace/mode/rust'
+      sol: 'solidity',
+      yul: 'solidity',
+      mvir: 'move',
+      js: 'javascript',
+      py: 'python',
+      vy: 'python',
+      zok: 'zokrates',
+      lex: 'lexon',
+      txt: 'text',
+      json: 'json',
+      abi: 'json',
+      rs: 'rust'
     }
 
-    // Editor Setup
-    const el = yo`<div id="input" data-id="editorInput"></div>`
-    this.editor = ace.edit(el)
+    // to be implemented by the react component
+    this.api = {}
+  }
 
-    ace.acequire('ace/ext/language_tools')
+  render () {
+    if (this.el) return this.el
 
-    // Unmap ctrl-l & cmd-l
-    this.editor.commands.bindKeys({
-      'ctrl-L': null,
-      'Command-L': null
-    })
+    this.el = yo`
+    <div id="editorView">
+     
+    </div>`
 
-    // shortcuts for "Ctrl-"" and "Ctrl+"" to increase/decrease font size of the editor
-    this.editor.commands.addCommand({
-      name: 'increasefontsizeEqual',
-      bindKey: { win: 'Ctrl-=', mac: 'Command-=' },
-      exec: (editor) => {
-        this.editorFontSize(1)
-      },
-      readOnly: true
-    })
+    this.renderComponent()
 
-    this.editor.commands.addCommand({
-      name: 'increasefontsizePlus',
-      bindKey: { win: 'Ctrl-+', mac: 'Command-+' },
-      exec: (editor) => {
-        this.editorFontSize(1)
-      },
-      readOnly: true
-    })
+    return this.el
+  }
 
-    this.editor.commands.addCommand({
-      name: 'decreasefontsize',
-      bindKey: { win: 'Ctrl--', mac: 'Command--' },
-      exec: (editor) => {
-        this.editorFontSize(-1)
-      },
-      readOnly: true
-    })
-
-    this.editor.setShowPrintMargin(false)
-    this.editor.resize(true)
-
-    this.editor.setOptions({
-      enableBasicAutocompletion: true,
-      enableLiveAutocompletion: true
-    })
-
-    el.className += ' ' + css['ace-editor']
-    el.editor = this.editor // required to access the editor during tests
-    this.render = () => el
-
-    // Completer for editor
-    const flowCompleter = {
-      getCompletions: (editor, session, pos, prefix, callback) => {
-        // @TODO add here other propositions
-      }
-    }
-    langTools.addCompleter(flowCompleter)
-
-    // zoom with Ctrl+wheel
-    window.addEventListener('wheel', (e) => {
-      if (e.ctrlKey && Math.abs(e.wheelY) > 5) {
-        this.editorFontSize(e.wheelY > 0 ? 1 : -1)
-      }
-    })
-
-    // EVENTS LISTENERS
-
-    // Gutter Mouse down
-    this.editor.on('guttermousedown', e => {
-      const target = e.domEvent.target
-      if (target.className.indexOf('ace_gutter-cell') === -1) {
-        return
-      }
-      const row = e.getDocumentPosition().row
-      const breakpoints = e.editor.session.getBreakpoints()
-      for (const k in breakpoints) {
-        if (k === row.toString()) {
-          this.triggerEvent('breakpointCleared', [this.currentSession, row])
-          e.editor.session.clearBreakpoint(row)
-          e.stop()
-          return
-        }
-      }
-      this.setBreakpoint(row)
-      this.triggerEvent('breakpointAdded', [this.currentSession, row])
-      e.stop()
-    })
-
-    // Do setup on initialisation here
-    this.editor.on('changeSession', () => {
-      this._onChange()
-      this.triggerEvent('sessionSwitched', [])
-      this.editor.getSession().on('change', () => {
-        this._onChange()
-        this.sourceHighlighters.discardAllHighlights()
-        this.triggerEvent('contentChanged', [])
-      })
-    })
+  renderComponent () {
+    ReactDOM.render(
+      <EditorUI editorAPI={this} theme={this.currentTheme} currentFile={this.currentFile} />
+      , this.el)
   }
 
   triggerEvent (name, params) {
@@ -234,7 +127,7 @@ class Editor extends Plugin {
   }
 
   setTheme (type) {
-    this.editor.setTheme('ace/theme/' + this._themes[type])
+    this.api.setTheme(this._themes[type])
   }
 
   _onChange () {
@@ -263,10 +156,8 @@ class Editor extends Plugin {
   }
 
   _switchSession (path) {
-    this.currentSession = path
-    this.editor.setSession(this.sessions[this.currentSession])
-    this.editor.setReadOnly(this.readOnlySessions[this.currentSession])
-    this.editor.focus()
+    this.currentFile = path
+    this.renderComponent()
   }
 
   /**
@@ -283,17 +174,38 @@ class Editor extends Plugin {
   }
 
   /**
-   * Create an Ace session
+   * Create an editor session
+   * @param {string} path path of the file
    * @param {string} content Content of the file to open
-   * @param {string} mode Ace Mode for this file [Default is `text`]
+   * @param {string} mode Mode for this file [Default is `text`]
    */
-  _createSession (content, mode) {
-    const s = new ace.EditSession(content)
-    s.setMode(mode || 'ace/mode/text')
-    s.setUndoManager(new ace.UndoManager())
-    s.setTabSize(4)
-    s.setUseSoftTabs(true)
-    return s
+  _createSession (path, content, mode) {
+    this.api.addModel(content, mode, path, false)
+    return {
+      path,
+      content,
+      language: mode,
+      setAnnotations: (annotations) => {
+        for (const annotation of annotations) {
+          this.api.addAnnotation(path, annotation.row, annotation.type + ' ' + annotation.text)      
+        }
+      },
+      addMarker: (lineColumnPos, cssClass) => {
+        this.api.addMarker(path, lineColumnPos.start.line, cssClass)
+      },
+      removeMarker: (position) => {
+        this.api.removeMarker(path, position.start.line)      
+      },
+      setValue: () => {
+        this.api.setValue(path, content)
+      },
+      getValue: () => {
+        this.api.getValue(path, content)
+      },
+      setBreakpoint: (row, className) => {
+        this.api.addBreakpoint(path, row, className)
+      }
+    }
   }
 
   /**
@@ -301,7 +213,7 @@ class Editor extends Plugin {
    * @param {string} string
    */
   find (string) {
-    return this.editor.find(string)
+    return this.api.findMatches(this.currentFile, string)
   }
 
   /**
@@ -309,8 +221,8 @@ class Editor extends Plugin {
    */
   displayEmptyReadOnlySession () {
     this.currentSession = null
-    this.editor.setSession(this.emptySession)
-    this.editor.setReadOnly(true)
+    this.api.addModel('', 'text', '_blank', true)
+    this.api.setCurrentPath('_blank')
   }
 
   /**
@@ -319,7 +231,8 @@ class Editor extends Plugin {
    * @param {string} className Class of the breakpoint
    */
   setBreakpoint (row, className) {
-    this.editor.session.setBreakpoint(row, className)
+    const session = this.sessions[filePath]
+    session.addBreakpoint(this.currentFile, row, className)
   }
 
   /**
@@ -327,9 +240,9 @@ class Editor extends Plugin {
    * @param {number} incr The amount of pixels to add to the font.
    */
   editorFontSize (incr) {
-    const newSize = this.editor.getFontSize() + incr
+    const newSize = this.api.getFontSize() + incr
     if (newSize >= 6) {
-      this.editor.setFontSize(newSize)
+      this.api.setFontSize(newSize)
     }
   }
 
@@ -356,7 +269,7 @@ class Editor extends Plugin {
        - URL not prepended with the file explorer. We assume (as it is in the whole app, that this is a "browser" URL
     */
     if (!this.sessions[path]) {
-      const session = this._createSession(content, this._getMode(path))
+      const session = this._createSession(path, content, this._getMode(path))
       this.sessions[path] = session
       this.readOnlySessions[path] = false
     } else if (this.sessions[path].getValue() !== content) {
@@ -372,7 +285,7 @@ class Editor extends Plugin {
    */
   openReadOnly (path, content) {
     if (!this.sessions[path]) {
-      const session = this._createSession(content, this._getMode(path))
+      const session = this._createSession(path, content, this._getMode(path))
       this.sessions[path] = session
       this.readOnlySessions[path] = true
     }
@@ -395,7 +308,7 @@ class Editor extends Plugin {
    */
   get (path) {
     if (!path || this.currentSession === path) {
-      return this.editor.getValue()
+      return this.api.getValue(path)
     } else if (this.sessions[path]) {
       return this.sessions[path].getValue()
     }
@@ -407,9 +320,6 @@ class Editor extends Plugin {
    * @return {String} path of the current session
    */
   current () {
-    if (this.editor.getSession() === this.emptySession) {
-      return
-    }
     return this.currentSession
   }
 
@@ -417,10 +327,7 @@ class Editor extends Plugin {
    * The position of the cursor
    */
   getCursorPosition () {
-    return this.editor.session.doc.positionToIndex(
-      this.editor.getCursorPosition(),
-      0
-    )
+    return this.api.getCursorPosition()
   }
 
   /**
@@ -447,19 +354,7 @@ class Editor extends Plugin {
    * @param {boolean} useWrapMode Enable (or disable) wrap mode
    */
   resize (useWrapMode) {
-    this.editor.resize()
-    const session = this.editor.getSession()
-    session.setUseWrapMode(useWrapMode)
-    if (session.getUseWrapMode()) {
-      const characterWidth = this.editor.renderer.characterWidth
-      const contentWidth = this.editor.container.ownerDocument.getElementsByClassName(
-        'ace_scroller'
-      )[0].clientWidth
-
-      if (contentWidth > 0) {
-        session.setWrapLimit(parseInt(contentWidth / characterWidth, 10))
-      }
-    }
+    this.api.setWordWrap(useWrapMode)
   }
 
   /**
@@ -476,7 +371,7 @@ class Editor extends Plugin {
       lineColumnPos.end.column
     )
     if (this.sessions[source]) {
-      return this.sessions[source].addMarker(currentRange, cssClass)
+      return this.sessions[source].addMarker(lineColumnPos, cssClass)
     }
     return null
   }
@@ -484,22 +379,19 @@ class Editor extends Plugin {
   /**
    * Scrolls to a line. If center is true, it puts the line in middle of screen (or attempts to).
    * @param {number} line The line to scroll to
-   * @param {boolean} center If true
-   * @param {boolean} animate If true animates scrolling
-   * @param {Function} callback Function to be called when the animation has finished
    */
-  scrollToLine (line, center, animate, callback) {
-    this.editor.scrollToLine(line, center, animate, callback)
+  scrollToLine (line) {
+    this.api.revealLine(line)
   }
 
   /**
    * Remove a marker from the session
-   * @param {string} markerId Id of the marker
+   * @param {string} position position where the marker is located
    * @param {string} source Path of the session
    */
-  removeMarker (markerId, source) {
+  removeMarker (position, source) {
     if (this.sessions[source]) {
-      this.sessions[source].removeMarker(markerId)
+      this.sessions[source].removeMarker(position)
     }
   }
 
@@ -515,7 +407,7 @@ class Editor extends Plugin {
    */
   clearAnnotationsByPlugin (filePath, plugin) {
     if (filePath && !this.sessions[filePath]) throw new Error('file not found' + filePath)
-    const session = this.sessions[filePath] || this.editor.getSession()
+    const session = this.sessions[filePath]
     const path = filePath || this.currentSession
 
     const currentAnnotations = this.sourceAnnotationsPerFile[path]
@@ -539,7 +431,7 @@ class Editor extends Plugin {
       annotation.hide = annotation.from !== name
     }
 
-    this._setAnnotations(this.editor.getSession(), this.currentSession)
+    this._setAnnotations(this.sessions[this.currentFile], this.currentSession)
   }
 
   /**
@@ -584,7 +476,7 @@ class Editor extends Plugin {
    */
   addAnnotation (annotation, filePath) {
     if (filePath && !this.sessions[filePath]) throw new Error('file not found' + filePath)
-    const session = this.sessions[filePath] || this.editor.getSession()
+    const session = this.sessions[filePath]
     const path = filePath || this.currentSession
 
     const { from } = this.currentRequest
@@ -606,8 +498,8 @@ class Editor extends Plugin {
    * @param {number} col
    */
   gotoLine (line, col) {
-    this.editor.focus()
-    this.editor.gotoLine(line + 1, col - 1, true)
+    this.api.focus()
+    this.api.revealLine(line + 1)
   }
 }
 

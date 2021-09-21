@@ -64,11 +64,12 @@ class SourceHighlighter {
         }
         `
 
-      this.statementMarker = this._deps.editor.addMarker(lineColumnPos, this.source, css.highlightcode.className + ' ' + css.customBackgroundColor.className + ' ' + `highlightLine${lineColumnPos.start.line}`)
-      this._deps.editor.scrollToLine(lineColumnPos.start.line, true, true, function () {})
+      this._deps.editor.addMarker(lineColumnPos, this.source, css.highlightcode.className + ' ' + css.customBackgroundColor.className + ' ' + `highlightLine${lineColumnPos.start.line}`)
+      this.statementMarker = lineColumnPos
+      this._deps.editor.scrollToLine(lineColumnPos.start.line)
       this.position = lineColumnPos
       if (lineColumnPos.start.line === lineColumnPos.end.line) {
-        this.fullLineMarker = this._deps.editor.addMarker({
+        const fullLine = {
           start: {
             line: lineColumnPos.start.line,
             column: 0
@@ -77,7 +78,9 @@ class SourceHighlighter {
             line: lineColumnPos.start.line + 1,
             column: 0
           }
-        }, this.source, css.highlightcode_fullLine.className)
+        }
+        this._deps.editor.addMarker(fullLine, this.source, css.highlightcode_fullLine.className)
+        this.fullLineMarker = fullLine        
       }
     }
   }

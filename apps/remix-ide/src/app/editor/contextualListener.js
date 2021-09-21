@@ -180,7 +180,7 @@ class ContextualListener extends Plugin {
   _stopHighlighting () {
     for (const eventKey in this._activeHighlights) {
       const event = this._activeHighlights[eventKey]
-      this.editor.removeMarker(event.eventId, event.fileTarget)
+      this.editor.removeMarker(event.position, event.fileTarget)
     }
     this.event.trigger('stopHighlighting', [])
     this._activeHighlights = []
