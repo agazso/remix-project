@@ -90,7 +90,8 @@ export class VMContext {
   customNetWorks
   blocks
   latestBlockNumber
-  txs
+  blockByTxHash
+  txByHash
   currentVm
   web3vm
   logsManager
@@ -103,7 +104,8 @@ export class VMContext {
     this.currentVm = this.createVm(this.currentFork)
     this.blocks = {}
     this.latestBlockNumber = 0
-    this.txs = {}
+    this.blockByTxHash = {}
+    this.txByHash = {}
     this.exeResults = {}
     this.logsManager = new execution.LogsManager()
   }
@@ -156,8 +158,9 @@ export class VMContext {
     this.logsManager.checkBlock(blockNumber, block, this.web3())
   }
 
-  trackTx (tx, block) {
-    this.txs[tx] = block
+  trackTx (txHash, block, tx) {
+    this.blockByTxHash[txHash] = block
+    this.txByHash[txHash] = tx
   }
 
   trackExecResult (tx, execReult) {
