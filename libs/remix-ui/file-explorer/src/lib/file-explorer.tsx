@@ -1065,7 +1065,7 @@ async function packageFiles (filesProvider, directory, callback) {
   if (isFile) {
     try {
       filesProvider.get(directory, (error, content) => {
-        if (error) throw new Error('An error ocurred while getting file content. ' + error)
+        if (error) throw new Error('An error ocurred while getting file content. ' + directory)
         if (/^\s+$/.test(content) || !content.length) {
           content = '// this line is added to create a gist. Empty file is not allowed.'
         }
